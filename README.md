@@ -2,8 +2,6 @@
 
 RAG-powered chatbot for Japanese Adult Video (JAV) information. Scrapes metadata from r18.com, javlibrary.com, dmm.co.jp. Users ask questions; Claude answers using retrieved context from FAISS vector index.
 
-**Location:** `D:\Work\pet\idol-dex\`
-
 ## Architecture
 
 ```
