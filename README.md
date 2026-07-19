@@ -1,6 +1,8 @@
-# JAV RAG Chatbot
+# Idol Dex — JAV RAG Chatbot
 
 RAG-powered chatbot for Japanese Adult Video (JAV) information. Scrapes metadata from r18.com, javlibrary.com, dmm.co.jp. Users ask questions; Claude answers using retrieved context from FAISS vector index.
+
+**Location:** `D:\Work\pet\idol-dex\`
 
 ## Architecture
 
@@ -21,10 +23,11 @@ Answer + sources
 ## Setup
 
 ```bash
-cd jav-chatbot
+cd D:\Work\pet\idol-dex
 pip install -r requirements.txt
 cp .env.example .env
 # Fill ANTHROPIC_API_KEY in .env
+python main.py
 ```
 
 ## Usage
