@@ -30,7 +30,21 @@ python main.py
 
 ## Usage
 
-### 1. Ingest data (one-time)
+### GUI (Streamlit)
+
+```bash
+# Terminal 1: Start FastAPI backend
+python main.py
+
+# Terminal 2: Start Streamlit frontend
+streamlit run streamlit_app.py
+```
+
+Opens `http://localhost:8501` in browser. Chat, view sources, ingest data from GUI.
+
+### CLI (API only)
+
+#### 1. Ingest data (one-time)
 
 ```bash
 python -m uvicorn src.api:app --reload
@@ -39,7 +53,7 @@ python -m uvicorn src.api:app --reload
 
 Scrapes r18.com, javlibrary, dmm.co.jp and indexes into FAISS.
 
-### 2. Chat
+#### 2. Chat
 
 ```bash
 curl -X POST http://localhost:8000/chat \
@@ -63,7 +77,7 @@ Response:
 }
 ```
 
-### 3. Direct search (no Claude)
+#### 3. Direct search (no Claude)
 
 ```bash
 curl "http://localhost:8000/search?q=milf"
