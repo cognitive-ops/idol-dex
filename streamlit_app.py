@@ -65,6 +65,30 @@ else:
 
 st.divider()
 
+
+def render_source(i: int, src: dict):
+    """Render one source card — idol profile or movie, depending on payload shape."""
+    st.markdown(f"**{i}. {src.get('title', 'Unknown')}**")
+    col1, col2 = st.columns(2)
+    is_idol = "name" in src or "cup" in src or "debut" in src
+    with col1:
+        if is_idol:
+            st.markdown(f"🎂 **Age:** {src.get('age', 'N/A')}")
+            st.markdown(f"📅 **Debut:** {src.get('debut', 'N/A')}")
+            st.markdown(f"📏 **Cup:** {src.get('cup', 'N/A')}")
+        else:
+            st.markdown(f"👥 **Actors:** {src.get('actors', 'N/A')}")
+            st.markdown(f"📅 **Date:** {src.get('date', 'N/A')}")
+    with col2:
+        if src.get("url"):
+            st.markdown(f"[🔗 View]({src['url']})")
+        if is_idol and src.get("movie_codes"):
+            codes = ", ".join(src["movie_codes"][:5])
+            st.markdown(f"🎬 **Movies:** {codes}")
+        similarity = src.get("similarity", 0)
+        st.progress(similarity, text=f"Relevance: {similarity:.1%}")
+
+
 # Chat history display
 chat_container = st.container()
 with chat_container:
@@ -75,16 +99,7 @@ with chat_container:
                 with st.expander(f"📚 Sources ({len(msg['sources'])})"):
                     for i, src in enumerate(msg["sources"], 1):
                         with st.container():
-                            st.markdown(f"**{i}. {src.get('title', 'Unknown')}**")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown(f"👥 **Actors:** {src.get('actors', 'N/A')}")
-                                st.markdown(f"📅 **Date:** {src.get('date', 'N/A')}")
-                            with col2:
-                                if src.get("url"):
-                                    st.markdown(f"[🔗 View on R18]({src['url']})")
-                                similarity = src.get("similarity", 0)
-                                st.progress(similarity, text=f"Relevance: {similarity:.1%}")
+                            render_source(i, src)
 
 st.divider()
 
@@ -122,16 +137,7 @@ if query:
                 if sources:
                     with st.expander(f"📚 Retrieved {len(sources)} sources"):
                         for i, src in enumerate(sources, 1):
-                            st.markdown(f"**{i}. {src.get('title', 'Unknown')}**")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown(f"👥 Actors: {src.get('actors', 'N/A')}")
-                                st.markdown(f"📅 Date: {src.get('date', 'N/A')}")
-                            with col2:
-                                if src.get("url"):
-                                    st.markdown(f"[🔗 View]({src['url']})")
-                                similarity = src.get("similarity", 0)
-                                st.progress(similarity, text=f"Relevance: {similarity:.1%}")
+                            render_source(i, src)
 
                 # Add to history
                 st.session_state.messages.append({
@@ -151,12 +157,21 @@ if query:
 st.sidebar.divider()
 st.sidebar.subheader("🛠️ Tools")
 
-if st.sidebar.button("🔄 Ingest Data", use_container_width=True):
+if st.sidebar.button("🔄 Ingest Movies + Idols", use_container_width=True):
     with st.spinner("Scraping sources and building index (this may take a few minutes)..."):
         try:
-            response = requests.post(f"{api_url}/ingest", timeout=60)
+            response = requests.post(f"{api_url}/ingest", timeout=120)
             data = response.json()
             st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} documents")
+        except Exception as e:
+            st.sidebar.error(f"❌ Ingest failed: {str(e)}")
+
+if st.sidebar.button("👤 Ingest Idols Only", use_container_width=True):
+    with st.spinner("Scraping idol profiles..."):
+        try:
+            response = requests.post(f"{api_url}/ingest/idols", timeout=60)
+            data = response.json()
+            st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} idol profiles")
         except Exception as e:
             st.sidebar.error(f"❌ Ingest failed: {str(e)}")
 

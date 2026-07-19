@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     metadata_path: str = "./data/metadata.json"
 
     # Web scraper
-    scraper_timeout: int = 10
+    scraper_timeout: int = 30
     scraper_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"

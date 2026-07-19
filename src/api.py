@@ -5,7 +5,7 @@ import anthropic
 
 from .config import settings
 from .rag import rag_store
-from .scraper import ingest_jav_data
+from .scraper import ingest_idols_only, ingest_jav_data
 
 app = FastAPI(title="JAV RAG Chatbot", version="0.1.0")
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -27,8 +27,15 @@ async def health():
 
 @app.post("/ingest")
 async def ingest():
-    """One-time: scrape JAV data and index into FAISS."""
+    """One-time: scrape JAV data (movies + idols) and index into FAISS."""
     count = await ingest_jav_data()
+    return {"indexed": count, "index_path": settings.faiss_index_path}
+
+
+@app.post("/ingest/idols")
+async def ingest_idols():
+    """Ingest idol profiles only (name, age, debut, cup size, movie codes)."""
+    count = await ingest_idols_only()
     return {"indexed": count, "index_path": settings.faiss_index_path}
 
 
@@ -51,13 +58,25 @@ async def chat(req: ChatRequest) -> ChatResponse:
     sources = []
     for doc, distance in search_results:
         context_parts.append(f"Source: {doc.title}\n{doc.content}")
-        sources.append({
+        src = {
             "title": doc.title,
             "url": doc.metadata.get("url", ""),
-            "actors": doc.metadata.get("actors", ""),
-            "date": doc.metadata.get("release_date", ""),
             "similarity": 1 / (1 + distance)  # convert L2 distance to similarity
-        })
+        }
+        if doc.metadata.get("type") == "idol":
+            src.update({
+                "name": doc.metadata.get("name", ""),
+                "age": doc.metadata.get("age", ""),
+                "debut": doc.metadata.get("debut", ""),
+                "cup": doc.metadata.get("cup", ""),
+                "movie_codes": doc.metadata.get("movie_codes", []),
+            })
+        else:
+            src.update({
+                "actors": doc.metadata.get("actors", ""),
+                "date": doc.metadata.get("release_date", ""),
+            })
+        sources.append(src)
 
     context = "\n\n---\n\n".join(context_parts[:settings.top_k])
     context = context[:settings.max_context_length]
@@ -65,8 +84,9 @@ async def chat(req: ChatRequest) -> ChatResponse:
     # Query Claude with context
     system_prompt = (
         "You are a helpful JAV (Japanese Adult Video) information assistant. "
-        "Answer user questions based on the provided context (database of JAV titles, "
-        "actors, release dates, plots). Be factual, helpful, and respectful. "
+        "Answer user questions based on the provided context — this includes both movie "
+        "titles (title, actors, release date, plot) and idol profiles (name, age, debut, "
+        "cup size, movie codes). Be factual, helpful, and respectful. "
         "If information is not in the context, say so clearly."
     )
 
