@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     # RAG
     embedding_model: str = "all-MiniLM-L6-v2"  # sentence-transformers local model
+    hf_hub_download_timeout: int = 60  # Hugging Face download timeout (seconds)
     top_k: int = 5
     max_context_length: int = 3000
 
