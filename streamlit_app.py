@@ -89,10 +89,7 @@ with chat_container:
 st.divider()
 
 # Query input
-query = st.chat_input(
-    "Ask about JAV titles, actors, releases...",
-    placeholder="e.g., What are popular JAV titles from 2023?"
-)
+query = st.chat_input("Ask about JAV titles, actors, releases...")
 
 if query:
     # Add user message to history
