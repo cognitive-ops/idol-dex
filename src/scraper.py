@@ -42,15 +42,15 @@ class JAVScraper:
             print(f"dmm scrape failed: {e}")
         return docs
 
-    def scrape_r18(self, search_query: str = "") -> list[Document]:
-        """Scrape from r18.com (English mirror of DMM). Falls back to demo data if unavailable."""
+    def scrape_javdatabase(self, search_query: str = "") -> list[Document]:
+        """Scrape from javdatabase.com (reliable JAV catalog)."""
         docs = []
 
-        # Try multiple URL patterns
+        # JAVDatabase URLs
         urls = [
-            "https://www.r18.com/videos/vod/movies/genre/latest/",
-            "https://www.r18.com/common/search/searchlist/",
-            "https://www.r18.com/videos/",
+            "https://www.javdatabase.com/latest/",
+            "https://www.javdatabase.com/movies/",
+            "https://www.javdatabase.com/",
         ]
 
         for url in urls:
@@ -65,11 +65,12 @@ class JAVScraper:
                 response.raise_for_status()
                 soup = BeautifulSoup(response.content, "lxml")
 
-                # Try multiple CSS selectors (site structure changes)
+                # JAVDatabase specific selectors
                 items = (
-                    soup.select(".productItem")
-                    or soup.select("[data-product-id]")
-                    or soup.select(".content-box")
+                    soup.select(".movie-item")
+                    or soup.select(".video-item")
+                    or soup.select("[class*='movie']")
+                    or soup.select("[class*='video']")
                     or []
                 )
 
@@ -79,53 +80,64 @@ class JAVScraper:
 
                 print(f"  Found {len(items)} items")
 
-                for item in items[:10]:  # limit to first 10
+                for item in items[:15]:  # limit to first 15
                     try:
-                        # Try multiple selectors for title
+                        # Extract title (try multiple selectors)
                         title_elem = (
-                            item.select_one(".title a")
-                            or item.select_one(".item-title a")
-                            or item.select_one("h2 a")
+                            item.select_one("h2 a")
+                            or item.select_one("h3 a")
+                            or item.select_one(".title a")
+                            or item.select_one("a[title]")
                         )
                         if not title_elem:
                             continue
 
                         title = title_elem.get_text(strip=True)
                         product_url = title_elem.get("href", "")
+                        if product_url and not product_url.startswith("http"):
+                            product_url = f"https://www.javdatabase.com{product_url}"
 
-                        # Extract metadata
-                        actors_text = (
-                            item.select_one(".performer")
+                        # Extract actors/cast
+                        actors_elem = (
+                            item.select_one(".actors")
                             or item.select_one(".cast")
+                            or item.select_one("[class*='actor']")
                         )
                         actors = (
-                            actors_text.get_text(strip=True)
-                            if actors_text
+                            ", ".join(
+                                [a.get_text(strip=True) for a in actors_elem.select("a")]
+                                or [actors_elem.get_text(strip=True)]
+                            )
+                            if actors_elem
                             else "Unknown"
                         )
 
-                        date_text = (
-                            item.select_one(".releaseDate")
+                        # Extract release date
+                        date_elem = (
+                            item.select_one(".release-date")
                             or item.select_one(".date")
+                            or item.select_one("[class*='date']")
                         )
                         date_str = (
-                            date_text.get_text(strip=True) if date_text else ""
+                            date_elem.get_text(strip=True) if date_elem else ""
                         )
 
-                        plot_text = (
+                        # Extract plot/description
+                        plot_elem = (
                             item.select_one(".description")
                             or item.select_one(".synopsis")
+                            or item.select_one("p")
                         )
                         plot = (
-                            plot_text.get_text(strip=True) if plot_text else ""
+                            plot_elem.get_text(strip=True) if plot_elem else ""
                         )
 
                         # Create document
-                        doc_id = f"r18:{title.replace(' ', '_')[:50]}"
+                        doc_id = f"javdb:{title.replace(' ', '_')[:50]}"
                         metadata = {
                             "actors": actors,
                             "release_date": date_str,
-                            "source": "r18.com",
+                            "source": "javdatabase.com",
                             "url": product_url,
                         }
                         content = (
@@ -136,14 +148,15 @@ class JAVScraper:
                         )
 
                         docs.append(Document(doc_id, title, metadata, content))
-                        time.sleep(0.5)  # rate limit
+                        time.sleep(0.3)  # rate limit
 
                     except Exception as e:
                         print(f"  Error parsing item: {e}")
                         continue
 
                 if docs:
-                    break  # Stop if we got results
+                    print(f"  ✅ Collected {len(docs)} documents from {url}")
+                    break
 
             except Exception as e:
                 print(f"  Failed ({type(e).__name__}): {e}")
@@ -155,6 +168,12 @@ class JAVScraper:
             docs = self._get_demo_data()
 
         return docs
+
+    # Alias for backward compatibility
+    def scrape_r18(self, search_query: str = "") -> list[Document]:
+        """Deprecated: use scrape_javdatabase instead."""
+        print("⚠️  r18.com is no longer maintained. Switching to javdatabase.com...")
+        return self.scrape_javdatabase(search_query)
 
     def _get_demo_data(self) -> list[Document]:
         """Demo data for testing when live scraping fails."""
@@ -201,8 +220,8 @@ class JAVScraper:
     def scrape_all(self) -> list[Document]:
         """Scrape from all sources."""
         all_docs = []
-        print("Scraping r18.com...")
-        all_docs.extend(self.scrape_r18())
+        print("Scraping javdatabase.com...")
+        all_docs.extend(self.scrape_javdatabase())
         print(f"Found {len(all_docs)} documents total")
         return all_docs
 
