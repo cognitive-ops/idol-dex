@@ -77,9 +77,15 @@ class RAGStore:
         logger.info("added %d docs, index size now=%d", len(docs), self.index.ntotal)
         self._save()
 
-    def search(self, query: str, k: int = settings.top_k) -> list[tuple[Document, float]]:
-        """Search for top-k documents most similar to query."""
-        logger.debug("search: query=%r k=%d", query, k)
+    def search(
+        self, query: str, k: int = settings.top_k, filters: dict[str, str] | None = None
+    ) -> list[tuple[Document, float]]:
+        """Search for top-k documents most similar to query.
+
+        `filters` is accepted for interface parity with QdrantStore but ignored
+        here — FAISS has no payload index to filter on before the scan.
+        """
+        logger.debug("search: query=%r k=%d filters=%r", query, k, filters)
         if self.index is None or not self.documents:
             logger.debug("search: empty index, returning no results")
             return []
@@ -120,42 +126,108 @@ class QdrantStore:
         logger.debug("QdrantStore init: url=%s collection=%s", url, collection)
         self._ensure_collection()
 
+    # payload fields worth filtering on before a vector search runs
+    _INDEXED_PAYLOAD_FIELDS = (
+        "metadata.type",
+        "metadata.actors",
+        "metadata.name",
+        "metadata.release_date",
+    )
+
     def _ensure_collection(self):
-        from qdrant_client.models import Distance, VectorParams
+        from qdrant_client.models import (
+            Distance,
+            PayloadSchemaType,
+            ScalarQuantization,
+            ScalarQuantizationConfig,
+            ScalarType,
+            VectorParams,
+        )
 
         if not self.client.collection_exists(self.collection):
             dim = embedder.get_embedding_dim()
             logger.info("creating qdrant collection=%s dim=%d", self.collection, dim)
             self.client.create_collection(
                 collection_name=self.collection,
-                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+                vectors_config=VectorParams(
+                    size=dim,
+                    distance=Distance.COSINE,
+                    on_disk=True,  # vectors read from mmap'd disk, not held in RAM
+                ),
+                quantization_config=ScalarQuantization(
+                    scalar=ScalarQuantizationConfig(
+                        type=ScalarType.INT8,
+                        always_ram=True,  # quantized (small) vectors stay in RAM, originals on disk
+                    )
+                ),
             )
         else:
             logger.debug("qdrant collection=%s already exists", self.collection)
+
+        for field in self._INDEXED_PAYLOAD_FIELDS:
+            try:
+                self.client.create_payload_index(
+                    collection_name=self.collection,
+                    field_name=field,
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+            except Exception as e:
+                logger.debug("payload index on %s skipped/exists: %s", field, e)
 
     @staticmethod
     def _point_id(doc_id: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, doc_id))
 
+    _UPSERT_BATCH_SIZE = 256
+
     def add_documents(self, docs: list[Document]) -> None:
-        """Upsert documents as points (vector + full payload) into Qdrant."""
+        """Upsert documents as points (vector + full payload) into Qdrant, in batches
+        so a big scrape (thousands of idols/movies) doesn't embed/upsert in one shot."""
         from qdrant_client.models import PointStruct
 
-        logger.debug("add_documents: embedding %d docs", len(docs))
-        embeddings = embedder.embed_batch([doc.content for doc in docs])
+        for start in range(0, len(docs), self._UPSERT_BATCH_SIZE):
+            batch = docs[start:start + self._UPSERT_BATCH_SIZE]
+            logger.debug("add_documents: embedding batch %d-%d of %d", start, start + len(batch), len(docs))
+            embeddings = embedder.embed_batch([doc.content for doc in batch])
 
-        points = [
-            PointStruct(id=self._point_id(doc.doc_id), vector=emb, payload=doc.to_dict())
-            for doc, emb in zip(docs, embeddings)
-        ]
-        self.client.upsert(collection_name=self.collection, points=points)
+            points = [
+                PointStruct(id=self._point_id(doc.doc_id), vector=emb, payload=doc.to_dict())
+                for doc, emb in zip(batch, embeddings)
+            ]
+            self.client.upsert(collection_name=self.collection, points=points)
+
         logger.info("upserted %d docs into qdrant collection=%s", len(docs), self.collection)
 
-    def search(self, query: str, k: int = settings.top_k) -> list[tuple[Document, float]]:
-        """Search for top-k documents most similar to query."""
-        logger.debug("search: query=%r k=%d", query, k)
+    def search(
+        self, query: str, k: int = settings.top_k, filters: dict[str, str] | None = None
+    ) -> list[tuple[Document, float]]:
+        """Search for top-k documents most similar to query.
+
+        `filters` maps metadata field name (e.g. "type", "actors") to an exact
+        match value. Matching relies on the payload indexes created in
+        _ensure_collection, so the filter narrows the candidate set before the
+        HNSW search runs instead of scanning every point.
+        """
+        logger.debug("search: query=%r k=%d filters=%r", query, k, filters)
         query_emb = embedder.embed_text(query)
-        hits = self.client.search(collection_name=self.collection, query_vector=query_emb, limit=k)
+
+        query_filter = None
+        if filters:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            query_filter = Filter(
+                must=[
+                    FieldCondition(key=f"metadata.{field}", match=MatchValue(value=value))
+                    for field, value in filters.items()
+                ]
+            )
+
+        hits = self.client.search(
+            collection_name=self.collection,
+            query_vector=query_emb,
+            query_filter=query_filter,
+            limit=k,
+        )
 
         results = []
         for hit in hits:

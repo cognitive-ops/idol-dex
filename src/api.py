@@ -127,10 +127,12 @@ Please answer based on the context above. If the question cannot be answered fro
 
 
 @app.get("/search")
-async def search(q: str):
-    """Direct metadata search (no Claude)."""
-    logger.debug("GET /search q=%r", q)
-    results = rag_store.search(q, k=settings.top_k)
+async def search(q: str, type: str | None = None, actors: str | None = None):
+    """Direct metadata search (no Claude). Optional `type`/`actors` narrow via
+    the Qdrant payload index before the vector search runs."""
+    logger.debug("GET /search q=%r type=%r actors=%r", q, type, actors)
+    filters = {k: v for k, v in {"type": type, "actors": actors}.items() if v}
+    results = rag_store.search(q, k=settings.top_k, filters=filters or None)
     return {
         "query": q,
         "results": [
