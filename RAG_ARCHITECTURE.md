@@ -264,7 +264,7 @@ data/imdb/title.principals.tsv.gz
 data/imdb/name.basics.tsv.gz
 ```
 
-Downloaded once, reused on every subsequent `/ingest` call unless deleted manually.
+Downloaded once, reused on every subsequent `/ingest` call unless deleted manually. Local dev: plain files under `data/imdb/` (gitignored). Docker Compose: the `api` service mounts the `imdb_data` named volume at `/app/data/imdb`, so the ~1.3GB of dataset files survive `docker compose up --build` (they're excluded from the build context via `.dockerignore` — only ever fetched via `_download()`, never baked into the image).
 
 ## Stage 5: Retrieval (Query → Top-K Documents)
 
@@ -441,11 +441,12 @@ These are the titles in the indexed dataset featuring Tom Hanks as top-billed ca
 | `src/rag.py` | `rag_store` factory, `QdrantStore` + `RAGStore` (FAISS) implementations, search |
 | `src/config.py` | `vector_backend` switch + per-backend settings (`qdrant_url`, `qdrant_collection`, `faiss_index_path`, `metadata_path`, `imdb_*`) |
 | `src/api.py` | HTTP endpoints, query embedding, retrieval |
-| `docker-compose.yml` | `qdrant` service (port 6333, volume `qdrant_data`) + app services wired with `VECTOR_BACKEND=qdrant` |
+| `docker-compose.yml` | `qdrant` service (port 6333, volume `qdrant_data`) + app services wired with `VECTOR_BACKEND=qdrant`; `api` also mounts `imdb_data` volume at `/app/data/imdb` |
+| `.dockerignore` | Excludes `data/imdb` (and `data/faiss_index`, `.venv`, `.git`) from the image build context |
 | Qdrant collection `imdb_docs` | Vectors + payload (title, actors, url, content) — server-side, no local files |
 | `data/faiss_index/index.faiss` | Binary FAISS index (disk, local-dev fallback only) |
 | `data/metadata.json` | Document metadata (local-dev fallback only) |
-| `data/imdb/*.tsv.gz` | Cached IMDb dataset downloads |
+| `data/imdb/*.tsv.gz` | Cached IMDb dataset downloads (plain dir locally, `imdb_data` volume in Docker Compose) |
 
 ## Performance Notes
 

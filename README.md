@@ -30,6 +30,22 @@ cp .env.example .env
 python main.py
 ```
 
+### Docker Compose (Qdrant backend)
+
+```bash
+docker compose up -d --build
+```
+
+Runs `qdrant` (6333), `api` (8000), `streamlit` (8501). Windows without a native Docker CLI: run the same command inside WSL (e.g. `wsl -d <distro> -- bash -lc "cd /mnt/d/Work/pet/idol-dex && docker compose up -d --build"`) — ports still publish to `localhost` on the Windows side.
+
+`VECTOR_BACKEND=qdrant` is set for `api`/`streamlit` in `docker-compose.yml`, overriding the FAISS default. Downloaded IMDb dataset TSVs persist in the `imdb_data` named volume (`/app/data/imdb`), so re-ingesting after a container rebuild doesn't re-download. Qdrant's own storage persists in the `qdrant_data` volume.
+
+```bash
+curl -X POST http://localhost:8000/ingest
+docker compose ps                 # check container health
+docker compose logs -f api        # tail ingest progress
+```
+
 ## Usage
 
 ### GUI (Streamlit)
@@ -112,6 +128,7 @@ curl "http://localhost:8000/search?q=heist"
 - **No multi-modal** (images, trailers, video clips)
 - **Local FAISS only** by default (Qdrant available via docker-compose)
 - **Single replica** (no concurrent requests handling)
+- **Docker on Windows** — this repo has no native Docker CLI on the host; run `docker compose` from inside a WSL distro with Docker installed
 
 ## Roadmap
 
