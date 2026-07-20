@@ -1,8 +1,17 @@
 """Streamlit GUI for JAV RAG chatbot."""
+import logging
 import streamlit as st
 import requests
 import json
 from datetime import datetime
+
+from src.config import settings
+
+logging.basicConfig(
+    level=settings.log_level,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 # Streamlit config
 st.set_page_config(
@@ -31,7 +40,7 @@ with st.sidebar:
     st.title("⚙️ Configuration")
     api_url = st.text_input(
         "API Base URL",
-        value="http://localhost:8000",
+        value=settings.api_base_url,
         help="FastAPI server URL"
     )
     top_k = st.slider("Results per query", 1, 10, 5)
@@ -48,8 +57,10 @@ if "api_healthy" not in st.session_state:
 def check_api():
     try:
         response = requests.get(f"{api_url}/health", timeout=2)
+        logger.debug("health check %s -> %d", api_url, response.status_code)
         return response.status_code == 200
-    except:
+    except Exception as e:
+        logger.debug("health check %s failed: %s", api_url, e)
         return False
 
 # Main chat interface
@@ -121,6 +132,7 @@ if query:
     with st.chat_message("assistant"):
         with st.spinner("🔍 Searching database..."):
             try:
+                logger.debug("POST %s/chat query=%r", api_url, query)
                 response = requests.post(
                     f"{api_url}/chat",
                     json={"query": query},
@@ -128,6 +140,7 @@ if query:
                 )
                 response.raise_for_status()
                 data = response.json()
+                logger.debug("/chat response: %d sources", len(data.get("sources", [])))
 
                 # Display answer
                 st.markdown(data.get("answer", "No answer generated"))
@@ -147,10 +160,13 @@ if query:
                 })
 
             except requests.exceptions.Timeout:
+                logger.warning("/chat request timed out")
                 st.error("⏱️ Request timed out. Try a simpler query.")
             except requests.exceptions.ConnectionError:
+                logger.warning("/chat connection error to %s", api_url)
                 st.error("❌ Cannot connect to API. Is the server running?")
             except Exception as e:
+                logger.error("/chat error: %s", e)
                 st.error(f"❌ Error: {str(e)}")
 
 # Sidebar actions
@@ -160,19 +176,25 @@ st.sidebar.subheader("🛠️ Tools")
 if st.sidebar.button("🔄 Ingest Movies + Idols", use_container_width=True):
     with st.spinner("Scraping sources and building index (this may take a few minutes)..."):
         try:
+            logger.debug("POST %s/ingest", api_url)
             response = requests.post(f"{api_url}/ingest", timeout=120)
             data = response.json()
+            logger.info("/ingest response: indexed=%s", data.get("indexed", 0))
             st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} documents")
         except Exception as e:
+            logger.error("/ingest failed: %s", e)
             st.sidebar.error(f"❌ Ingest failed: {str(e)}")
 
 if st.sidebar.button("👤 Ingest Idols Only", use_container_width=True):
     with st.spinner("Scraping idol profiles..."):
         try:
+            logger.debug("POST %s/ingest/idols", api_url)
             response = requests.post(f"{api_url}/ingest/idols", timeout=60)
             data = response.json()
+            logger.info("/ingest/idols response: indexed=%s", data.get("indexed", 0))
             st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} idol profiles")
         except Exception as e:
+            logger.error("/ingest/idols failed: %s", e)
             st.sidebar.error(f"❌ Ingest failed: {str(e)}")
 
 if st.sidebar.button("🗑️ Clear Chat History", use_container_width=True):

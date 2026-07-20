@@ -1,4 +1,6 @@
 """FastAPI app — chat endpoint with RAG + Claude."""
+import logging
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import anthropic
@@ -6,6 +8,8 @@ import anthropic
 from .config import settings
 from .rag import rag_store
 from .scraper import ingest_idols_only, ingest_jav_data
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="JAV RAG Chatbot", version="0.1.0")
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
@@ -28,25 +32,31 @@ async def health():
 @app.post("/ingest")
 async def ingest():
     """One-time: scrape JAV data (movies + idols) and index into FAISS."""
+    logger.debug("POST /ingest")
     count = await ingest_jav_data()
+    logger.info("/ingest done: indexed=%d", count)
     return {"indexed": count, "index_path": settings.faiss_index_path}
 
 
 @app.post("/ingest/idols")
 async def ingest_idols():
     """Ingest idol profiles only (name, age, debut, cup size, movie codes)."""
+    logger.debug("POST /ingest/idols")
     count = await ingest_idols_only()
+    logger.info("/ingest/idols done: indexed=%d", count)
     return {"indexed": count, "index_path": settings.faiss_index_path}
 
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> ChatResponse:
     """Chat endpoint with RAG."""
+    logger.debug("POST /chat query=%r", req.query)
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="query required")
 
     # Retrieve relevant documents
     search_results = rag_store.search(req.query, k=settings.top_k)
+    logger.debug("/chat: %d search results", len(search_results))
     if not search_results:
         return ChatResponse(
             answer="No relevant information found in the database.",
@@ -100,6 +110,7 @@ User question: {req.query}
 
 Please answer based on the context above. If the question cannot be answered from the context, say so."""
 
+    logger.debug("/chat: calling Claude model=%s context_len=%d", settings.model, len(context))
     response = client.messages.create(
         model=settings.model,
         max_tokens=1024,
@@ -110,6 +121,7 @@ Please answer based on the context above. If the question cannot be answered fro
     )
 
     answer = response.content[0].text
+    logger.debug("/chat: answer_len=%d sources=%d", len(answer), len(sources))
 
     return ChatResponse(answer=answer, sources=sources)
 
@@ -117,6 +129,7 @@ Please answer based on the context above. If the question cannot be answered fro
 @app.get("/search")
 async def search(q: str):
     """Direct metadata search (no Claude)."""
+    logger.debug("GET /search q=%r", q)
     results = rag_store.search(q, k=settings.top_k)
     return {
         "query": q,

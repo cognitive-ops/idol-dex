@@ -8,9 +8,19 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     model: str = "claude-3-5-sonnet-20241022"
 
+    # Vector backend: "faiss" (local file-based, default for dev) or "qdrant" (docker-compose)
+    vector_backend: str = "faiss"
+
     # FAISS
     faiss_index_path: str = "./data/faiss_index/index.faiss"
     metadata_path: str = "./data/metadata.json"
+
+    # Qdrant
+    qdrant_url: str = "http://localhost:6333"
+    qdrant_collection: str = "jav_docs"
+
+    # Frontend
+    api_base_url: str = "http://localhost:8000"
 
     # Web scraper
     scraper_timeout: int = 30
@@ -28,6 +38,9 @@ class Settings(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+
+    # Logging
+    log_level: str = "INFO"
 
     class Config:
         env_file = ".env"

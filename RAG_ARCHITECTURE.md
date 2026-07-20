@@ -1,21 +1,30 @@
-# RAG Architecture: Data Flow from JAVDatabase to FAISS Index
+# RAG Architecture: Data Flow from JAVDatabase to Vector Store
 
 ## Overview
 
-The JAV Chatbot uses a Retrieval-Augmented Generation (RAG) pipeline to fetch data from javdatabase.com, embed it, index it with FAISS, and retrieve relevant documents when users query.
+The JAV Chatbot uses a Retrieval-Augmented Generation (RAG) pipeline to fetch data from javdatabase.com, embed it, index it in a vector store, and retrieve relevant documents when users query.
+
+Vector store backend is pluggable (`src/rag.py`), picked via `settings.vector_backend`:
+
+| Backend | When used | Storage |
+|---------|-----------|---------|
+| `qdrant` | docker-compose stack (`docker-compose.yml` sets `VECTOR_BACKEND=qdrant`) | Qdrant server, collection `jav_docs`, vectors + payload live in Qdrant (no local files) |
+| `faiss` | local dev default (`Settings.vector_backend` default) | `data/faiss_index/index.faiss` + `data/metadata.json` on disk |
+
+Both backends implement the same interface (`add_documents`, `search`) and are selected once at import time via `_build_store()`, exposed as the module-level singleton `rag_store`.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    JAV RAG Pipeline                             │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  Scraper        Embedder         FAISS Index      Retrieval     │
-│  ────────       ────────         ───────────      ─────────     │
+│  Scraper        Embedder      Vector Store       Retrieval      │
+│  ────────       ────────      ────────────       ─────────      │
 │                                                                 │
-│  javdatabase   sentence-tx   vector DB        Claude + Context │
+│  javdatabase   sentence-tx   Qdrant / FAISS   Claude + Context │
 │      ↓             ↓             ↓                   ↓          │
 │   HTML       embedding()    add_documents()    search(query)   │
-│   parse      384-dim vec    L2 distance        get context     │
+│   parse      384-dim vec    cosine / L2        get context     │
 │                                                Claude answers   │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -116,24 +125,43 @@ embeddings = embedder.embed_batch([doc1.content, doc2.content, doc3.content, ...
 # Returns numpy array (N, 384) where N = number of documents
 ```
 
-## Stage 3: FAISS Index (Vector Storage & Indexing)
+## Stage 3: Vector Store (Storage & Indexing)
 
-### Index Type
-- **Backend:** FAISS (Facebook AI Similarity Search)
+Two interchangeable implementations in `src/rag.py`, chosen by `settings.vector_backend`.
+
+### Qdrant backend (`src/rag.py:QdrantStore`) — used by docker-compose
+
+- **Backend:** Qdrant server (`qdrant/qdrant:v1.11.3`, port 6333)
+- **Distance Metric:** Cosine
+- **Collection:** `jav_docs` (name via `settings.qdrant_collection`), created on first run with `VectorParams(size=384, distance=Distance.COSINE)`
+- **Storage:** vectors + full document payload (`doc_id`, `title`, `metadata`, `content`) stored together as Qdrant points — no separate metadata file
+- **Point ID:** deterministic `uuid.uuid5(NAMESPACE_URL, doc_id)`, so re-indexing the same `doc_id` upserts in place
+
+**Indexing Process (`QdrantStore.add_documents()`)**
+```python
+points = [
+    PointStruct(id=_point_id(doc.doc_id), vector=emb, payload=doc.to_dict())
+    for doc, emb in zip(docs, embeddings)
+]
+client.upsert(collection_name="jav_docs", points=points)
+```
+
+**Search (`QdrantStore.search()`)**
+```python
+hits = client.search(collection_name="jav_docs", query_vector=query_emb, limit=k)
+# hit.payload -> reconstruct Document
+# hit.score is cosine similarity (higher = more relevant)
+distance = 1.0 - hit.score  # normalized to distance-like value, lower = more relevant
+```
+
+### FAISS backend (`src/rag.py:RAGStore`) — local dev default
+
+- **Backend:** FAISS (Facebook AI Similarity Search), in-process
 - **Distance Metric:** L2 (Euclidean distance)
 - **Index Type:** `IndexFlatL2` (exact search, no approximation)
+- **Storage:** index vectors in a `.faiss` binary file, document metadata in a separate `.json` file, joined by list position
 
-### Indexing Process (`src/rag.py:RAGStore.add_documents()`)
-
-**Input: Embeddings (N×384 matrix)**
-```
-Document 1: [0.23, -0.15, 0.89, ...]  → javdb:SDMU-605
-Document 2: [0.12, 0.45, -0.32, ...]  → javdb:DASD-802
-Document 3: [0.67, -0.23, 0.11, ...]  → javdb:SSIS-123
-...
-```
-
-**FAISS Index Structure**
+**Indexing Process (`RAGStore.add_documents()`)**
 ```python
 index = faiss.IndexFlatL2(384)  # L2 distance, 384 dims
 index.add(embeddings_np)        # Add all document vectors
@@ -168,9 +196,13 @@ FAISS Index {
 }
 ```
 
-## Stage 4: Persistence (Disk Storage)
+## Stage 4: Persistence
 
-### Save to Disk (`src/rag.py:RAGStore._save()`)
+### Qdrant — server-side, no local files
+
+Persistence handled by the Qdrant server itself, backed by a docker volume (`qdrant_data:/qdrant/storage` in `docker-compose.yml`). App container has no on-disk index/metadata; restarting the API container just reconnects to the existing collection (`_ensure_collection()` is a no-op if the collection already exists).
+
+### FAISS — disk files (`src/rag.py:RAGStore._save()` / `_load()`)
 
 **FAISS Index File**
 ```
@@ -182,8 +214,7 @@ data/faiss_index/index.faiss  (binary format)
 data/metadata.json  (JSON format)
 ```
 
-### Load on Restart (`src/rag.py:RAGStore._load()`)
-
+**Load on Restart**
 ```python
 # Load index
 index = faiss.read_index("data/faiss_index/index.faiss")
@@ -197,6 +228,8 @@ with open("data/metadata.json") as f:
 
 ### User Query Processing (`src/api.py:/chat`)
 
+Caller always goes through the shared `rag_store.search(query, k)` — backend swap is transparent to `api.py`.
+
 **Input: User Question**
 ```
 "What are popular JAV actresses?"
@@ -208,7 +241,14 @@ query_emb = embedder.embed_text(user_query)
 # Returns: [0.25, -0.12, 0.91, ...]  (384 dims)
 ```
 
-**FAISS Search**
+**Qdrant search internals**
+```python
+hits = client.search(collection_name="jav_docs", query_vector=query_emb, limit=k)
+# hit.score = cosine similarity, higher = more relevant
+# distance = 1.0 - hit.score, for a consistent "lower = more relevant" contract
+```
+
+**FAISS search internals**
 ```python
 distances, indices = index.search(
     query_emb.reshape(1, -1),  # Shape: (1, 384)
@@ -220,7 +260,7 @@ distances, indices = index.search(
 # indices = [[0, 2, 1, 5, 3]]  (positions in index)
 ```
 
-**Similarity Calculation**
+**Similarity Calculation (FAISS L2 distance → 0-1 score)**
 ```python
 # L2 distance → similarity score (0-1)
 similarity = 1 / (1 + distance)
@@ -230,14 +270,8 @@ similarity = 1 / (1 + distance)
 # distance=0.45  → similarity=0.69  (69% match)
 ```
 
-**Retrieve Documents**
+**Result shape (both backends return the same `list[tuple[Document, float]]`)**
 ```python
-results = []
-for idx, distance in zip(indices[0], distances[0]):
-    doc = documents_list[idx]  # Get document by position
-    similarity = 1 / (1 + distance)
-    results.append((doc, similarity))
-
 # results = [
 #   (Document(javdb:SDMU-605, actors="Tsubomi, Aiko Natsukawa", ...), 0.87),
 #   (Document(javdb:SSIS-123, actors="Yuki Nagano", ...), 0.78),
@@ -334,16 +368,17 @@ These actresses have multiple releases and appear in recent titles from 2023.
          │ Embeddings
          ↓
 ┌──────────────────────────┐
-│ RAGStore (rag.py)        │
-│ FAISS index + metadata   │
-│ Disk: .faiss + .json     │
+│ rag_store (rag.py)       │
+│ QdrantStore (docker) or  │
+│ RAGStore/FAISS (local)   │
+│ picked via vector_backend│
 └────────┬─────────────────┘
-         │ On restart
+         │ On restart: reconnect (Qdrant) / reload from disk (FAISS)
          ↓
 ┌──────────────────────────┐
 │ API (api.py:/chat)       │
 │ Embed query              │
-│ FAISS search             │
+│ rag_store.search()       │
 │ Retrieve top-k docs      │
 └────────┬─────────────────┘
          │ Context + metadata
@@ -360,22 +395,27 @@ These actresses have multiple releases and appear in recent titles from 2023.
 |------|------|
 | `src/scraper.py` | Fetch HTML from javdatabase, parse, create Documents |
 | `src/embedder.py` | Convert Document text → 384-dim vectors |
-| `src/rag.py` | FAISS index, store/load embeddings, search |
+| `src/rag.py` | `rag_store` factory, `QdrantStore` + `RAGStore` (FAISS) implementations, search |
+| `src/config.py` | `vector_backend` switch + per-backend settings (`qdrant_url`, `qdrant_collection`, `faiss_index_path`, `metadata_path`) |
 | `src/api.py` | HTTP endpoints, query embedding, retrieval |
-| `data/faiss_index/index.faiss` | Binary FAISS index (disk) |
-| `data/metadata.json` | Document metadata (title, actors, url) |
+| `docker-compose.yml` | `qdrant` service (port 6333, volume `qdrant_data`) + app services wired with `VECTOR_BACKEND=qdrant` |
+| Qdrant collection `jav_docs` | Vectors + payload (title, actors, url, content) — server-side, no local files |
+| `data/faiss_index/index.faiss` | Binary FAISS index (disk, local-dev fallback only) |
+| `data/metadata.json` | Document metadata (local-dev fallback only) |
 
 ## Performance Notes
 
-- **Indexing:** ~100ms for 1000 documents
-- **Search:** ~5ms per query (L2 distance, exact match)
-- **Memory:** ~4MB per 1000 documents (FAISS + metadata)
-- **Scalability:** FAISS can handle millions of vectors; for >1M consider GPU or approximate search
+- **Qdrant indexing/search:** network round-trip to the Qdrant server per call (local docker network, typically low-single-digit ms overhead beyond the vector op itself); cosine similarity, HNSW-backed once collection grows past Qdrant's flat-search threshold
+- **FAISS indexing:** ~100ms for 1000 documents
+- **FAISS search:** ~5ms per query (L2 distance, exact match, in-process)
+- **Memory:** ~4MB per 1000 documents for FAISS (index + metadata in-process); Qdrant holds vectors/payload server-side instead of in the app process
+- **Scalability:** Qdrant scales via its own server (sharding, disk-backed storage, filtering on payload) — preferred path past local dev. FAISS `IndexFlatL2` is exact but in-memory only; for >1M vectors without Qdrant, consider `IndexIVFFlat` or GPU
 
 ## Future Improvements
 
-- [ ] Use `IndexIVFFlat` for approximate search (faster, lower memory)
-- [ ] Add GPU support (FAISS GPU backend)
-- [ ] Use Postgres for metadata (enable filtering by actor, date, etc.)
-- [ ] Implement incremental indexing (add new docs without full rebuild)
-- [ ] Add reranking (coarse search with FAISS, fine-rank with Claude)
+- [x] Incremental indexing without full rebuild — Qdrant `upsert` by deterministic point ID (`uuid5(doc_id)`) already does this
+- [x] Payload filtering (actor, date, etc.) — Qdrant payload supports filtered search; not yet exposed in `QdrantStore.search()` or `api.py`
+- [ ] Use `IndexIVFFlat` for FAISS approximate search (faster, lower memory) — FAISS path only, relevant for local dev with large corpora
+- [ ] Add GPU support (FAISS GPU backend) — FAISS path only
+- [ ] Add reranking (coarse vector search, fine-rank with Claude)
+- [ ] Retire FAISS backend once Qdrant is the only deploy target, or keep for offline/no-docker dev

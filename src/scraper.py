@@ -1,6 +1,7 @@
 """Web scraper for JAV data from dmm.co.jp, r18.com, javlibrary.com."""
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime
 
@@ -10,6 +11,8 @@ from bs4 import BeautifulSoup
 from .config import settings
 from .rag import Document, rag_store
 
+logger = logging.getLogger(__name__)
+
 
 class JAVScraper:
     """Scrape JAV metadata from multiple sources."""
@@ -18,6 +21,7 @@ class JAVScraper:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": settings.scraper_user_agent})
         self.timeout = settings.scraper_timeout
+        logger.debug("JAVScraper init: timeout=%ss ua=%s", self.timeout, settings.scraper_user_agent)
 
     def scrape_javlibrary(self, title_filter: str = "") -> list[Document]:
         """Scrape from javlibrary.com (metadata: title, actors, date, plot)."""
@@ -28,7 +32,7 @@ class JAVScraper:
             # or respectful scraping with delays
             pass
         except Exception as e:
-            print(f"javlibrary scrape failed: {e}")
+            logger.error("javlibrary scrape failed: %s", e)
         return docs
 
     def scrape_dmm(self, search_query: str = "新作") -> list[Document]:
@@ -39,7 +43,7 @@ class JAVScraper:
             # Placeholder for now
             pass
         except Exception as e:
-            print(f"dmm scrape failed: {e}")
+            logger.error("dmm scrape failed: %s", e)
         return docs
 
     def _list_idol_urls(self, limit: int = 20) -> list[tuple[str, str]]:
@@ -50,7 +54,11 @@ class JAVScraper:
         <p class="pcard"><a class="cut-text" href="/idols/slug/">Name</a></p>.
         """
         url = "https://www.javdatabase.com/idols/"
+        logger.debug("GET %s (timeout=%ss)", url, self.timeout)
+        t0 = time.monotonic()
         response = self.session.get(url, timeout=self.timeout)
+        logger.debug("GET %s -> %d in %.2fs, %d bytes", url, response.status_code,
+                     time.monotonic() - t0, len(response.content))
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "lxml")
 
@@ -65,6 +73,7 @@ class JAVScraper:
             pairs.append((name, href))
             if len(pairs) >= limit:
                 break
+        logger.debug("_list_idol_urls: parsed %d idol links (limit=%d)", len(pairs), limit)
         return pairs
 
     def _scrape_idol_detail(self, name: str, url: str) -> Document | None:
@@ -80,7 +89,11 @@ class JAVScraper:
         """
         import re
 
+        logger.debug("GET %s (timeout=%ss)", url, self.timeout)
+        t0 = time.monotonic()
         response = self.session.get(url, timeout=self.timeout)
+        logger.debug("GET %s -> %d in %.2fs, %d bytes", url, response.status_code,
+                     time.monotonic() - t0, len(response.content))
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "lxml")
 
@@ -108,6 +121,9 @@ class JAVScraper:
                 code = link.get_text(strip=True)
                 if code:
                     movies.append(code)
+
+        logger.debug("parsed idol=%s age=%s dob=%s debut=%s cup=%s height=%s movies=%d",
+                     name, age, dob, debut, cup, height, len(movies))
 
         doc_id = f"idol:{name.replace(' ', '_')[:50]}"
         metadata = {
@@ -145,28 +161,28 @@ class JAVScraper:
         """
         docs = []
         try:
-            print("Fetching idol listing page...")
+            logger.info("Fetching idol listing page...")
             idol_links = self._list_idol_urls(limit=limit)
-            print(f"  Found {len(idol_links)} idols, fetching profiles...")
+            logger.info("  Found %d idols, fetching profiles...", len(idol_links))
 
             for name, url in idol_links:
                 try:
                     doc = self._scrape_idol_detail(name, url)
                     if doc:
                         docs.append(doc)
-                        print(f"  ✅ {name}: age={doc.metadata['age']}, "
-                              f"debut={doc.metadata['debut']}, "
-                              f"movies={doc.metadata['movie_count']}")
+                        logger.info("  ✅ %s: age=%s, debut=%s, movies=%s",
+                                    name, doc.metadata['age'], doc.metadata['debut'],
+                                    doc.metadata['movie_count'])
                     time.sleep(0.3)  # rate limit
                 except Exception as e:
-                    print(f"  Error scraping {name}: {e}")
+                    logger.error("  Error scraping %s: %s", name, e)
                     continue
 
             if docs:
-                print(f"  ✅ Collected {len(docs)} idol profiles")
+                logger.info("  ✅ Collected %d idol profiles", len(docs))
 
         except Exception as e:
-            print(f"  Idol scraping failed ({type(e).__name__}): {e}")
+            logger.error("  Idol scraping failed (%s): %s", type(e).__name__, e)
 
         return docs
 
@@ -181,11 +197,13 @@ class JAVScraper:
 
         for url in urls:
             try:
-                print(f"Trying {url}...")
+                logger.info("Trying %s...", url)
+                t0 = time.monotonic()
                 response = self.session.get(url, timeout=self.timeout)
+                logger.debug("GET %s -> %d in %.2fs", url, response.status_code, time.monotonic() - t0)
 
                 if response.status_code == 404:
-                    print(f"  404 - URL not found, trying next...")
+                    logger.warning("  404 - URL not found, trying next...")
                     continue
 
                 response.raise_for_status()
@@ -201,10 +219,10 @@ class JAVScraper:
                 )
 
                 if not items:
-                    print(f"  No items found, trying next URL...")
+                    logger.warning("  No items found, trying next URL...")
                     continue
 
-                print(f"  Found {len(items)} items")
+                logger.info("  Found %d items", len(items))
 
                 for item in items[:15]:  # limit to first 15
                     try:
@@ -277,20 +295,20 @@ class JAVScraper:
                         time.sleep(0.3)  # rate limit
 
                     except Exception as e:
-                        print(f"  Error parsing item: {e}")
+                        logger.error("  Error parsing item: %s", e)
                         continue
 
                 if docs:
-                    print(f"  ✅ Collected {len(docs)} documents from {url}")
+                    logger.info("  ✅ Collected %d documents from %s", len(docs), url)
                     break
 
             except Exception as e:
-                print(f"  Failed ({type(e).__name__}): {e}")
+                logger.error("  Failed (%s): %s", type(e).__name__, e)
                 continue
 
         # Fallback: demo data if scraping failed
         if not docs:
-            print("\n⚠️  Scraping unavailable. Loading demo data instead...")
+            logger.warning("Scraping unavailable. Loading demo data instead...")
             docs = self._get_demo_data()
 
         return docs
@@ -298,7 +316,7 @@ class JAVScraper:
     # Alias for backward compatibility
     def scrape_r18(self, search_query: str = "") -> list[Document]:
         """Deprecated: use scrape_javdatabase instead."""
-        print("⚠️  r18.com is no longer maintained. Switching to javdatabase.com...")
+        logger.warning("r18.com is no longer maintained. Switching to javdatabase.com...")
         return self.scrape_javdatabase(search_query)
 
     def _get_demo_data(self) -> list[Document]:
@@ -346,11 +364,11 @@ class JAVScraper:
     def scrape_all(self) -> list[Document]:
         """Scrape from all sources: movies + idol profiles."""
         all_docs = []
-        print("Scraping javdatabase.com movies...")
+        logger.info("Scraping javdatabase.com movies...")
         all_docs.extend(self.scrape_javdatabase())
-        print("Scraping javdatabase.com idols...")
+        logger.info("Scraping javdatabase.com idols...")
         all_docs.extend(self.scrape_idols())
-        print(f"Found {len(all_docs)} documents total")
+        logger.info("Found %d documents total", len(all_docs))
         return all_docs
 
 
@@ -360,7 +378,7 @@ async def ingest_jav_data() -> int:
     docs = scraper.scrape_all()
     if docs:
         rag_store.add_documents(docs)
-        print(f"Indexed {len(docs)} documents")
+        logger.info("Indexed %d documents", len(docs))
     return len(docs)
 
 
@@ -370,5 +388,5 @@ async def ingest_idols_only() -> int:
     docs = scraper.scrape_idols()
     if docs:
         rag_store.add_documents(docs)
-        print(f"Indexed {len(docs)} idol profiles")
+        logger.info("Indexed %d idol profiles", len(docs))
     return len(docs)
