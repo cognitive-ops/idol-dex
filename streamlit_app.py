@@ -1,4 +1,4 @@
-"""Streamlit GUI for JAV RAG chatbot."""
+"""Streamlit GUI for IMDb RAG chatbot."""
 import logging
 import streamlit as st
 import requests
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Streamlit config
 st.set_page_config(
-    page_title="JAV Chatbot",
+    page_title="IMDb Chatbot",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -64,7 +64,7 @@ def check_api():
         return False
 
 # Main chat interface
-st.title("🎬 JAV Information Chatbot")
+st.title("🎬 IMDb Information Chatbot")
 st.markdown("*Powered by Claude RAG + FAISS semantic search*")
 
 # Health check
@@ -78,24 +78,26 @@ st.divider()
 
 
 def render_source(i: int, src: dict):
-    """Render one source card — idol profile or movie, depending on payload shape."""
+    """Render one source card — person profile or title, depending on payload shape."""
     st.markdown(f"**{i}. {src.get('title', 'Unknown')}**")
     col1, col2 = st.columns(2)
-    is_idol = "name" in src or "cup" in src or "debut" in src
+    is_person = "name" in src or "birth_year" in src
     with col1:
-        if is_idol:
-            st.markdown(f"🎂 **Age:** {src.get('age', 'N/A')}")
-            st.markdown(f"📅 **Debut:** {src.get('debut', 'N/A')}")
-            st.markdown(f"📏 **Cup:** {src.get('cup', 'N/A')}")
+        if is_person:
+            st.markdown(f"🎂 **Born:** {src.get('birth_year', 'N/A')}")
+            if src.get("death_year"):
+                st.markdown(f"⚰️ **Died:** {src.get('death_year')}")
+            st.markdown(f"🎭 **Professions:** {src.get('professions', 'N/A')}")
         else:
-            st.markdown(f"👥 **Actors:** {src.get('actors', 'N/A')}")
-            st.markdown(f"📅 **Date:** {src.get('date', 'N/A')}")
+            st.markdown(f"👥 **Cast:** {src.get('actors', 'N/A')}")
+            st.markdown(f"📅 **Year:** {src.get('year', 'N/A')}")
+            st.markdown(f"⭐ **Rating:** {src.get('rating', 'N/A')}")
     with col2:
         if src.get("url"):
-            st.markdown(f"[🔗 View]({src['url']})")
-        if is_idol and src.get("movie_codes"):
-            codes = ", ".join(src["movie_codes"][:5])
-            st.markdown(f"🎬 **Movies:** {codes}")
+            st.markdown(f"[🔗 View on IMDb]({src['url']})")
+        if is_person and src.get("known_for"):
+            known_for = ", ".join(src["known_for"][:5])
+            st.markdown(f"🎬 **Known for:** {known_for}")
         similarity = src.get("similarity", 0)
         st.progress(similarity, text=f"Relevance: {similarity:.1%}")
 
@@ -115,7 +117,7 @@ with chat_container:
 st.divider()
 
 # Query input
-query = st.chat_input("Ask about JAV titles, actors, releases...")
+query = st.chat_input("Ask about movies, TV shows, actors, actresses...")
 
 if query:
     # Add user message to history
@@ -173,11 +175,11 @@ if query:
 st.sidebar.divider()
 st.sidebar.subheader("🛠️ Tools")
 
-if st.sidebar.button("🔄 Ingest Movies + Idols", use_container_width=True):
-    with st.spinner("Scraping sources and building index (this may take a few minutes)..."):
+if st.sidebar.button("🔄 Ingest Titles + Cast", use_container_width=True):
+    with st.spinner("Downloading IMDb datasets and building index (this may take a few minutes)..."):
         try:
             logger.debug("POST %s/ingest", api_url)
-            response = requests.post(f"{api_url}/ingest", timeout=120)
+            response = requests.post(f"{api_url}/ingest", timeout=600)
             data = response.json()
             logger.info("/ingest response: indexed=%s", data.get("indexed", 0))
             st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} documents")
@@ -185,16 +187,16 @@ if st.sidebar.button("🔄 Ingest Movies + Idols", use_container_width=True):
             logger.error("/ingest failed: %s", e)
             st.sidebar.error(f"❌ Ingest failed: {str(e)}")
 
-if st.sidebar.button("👤 Ingest Idols Only", use_container_width=True):
-    with st.spinner("Scraping idol profiles..."):
+if st.sidebar.button("👤 Ingest People Only", use_container_width=True):
+    with st.spinner("Loading actor/actress profiles..."):
         try:
-            logger.debug("POST %s/ingest/idols", api_url)
-            response = requests.post(f"{api_url}/ingest/idols", timeout=60)
+            logger.debug("POST %s/ingest/people", api_url)
+            response = requests.post(f"{api_url}/ingest/people", timeout=600)
             data = response.json()
-            logger.info("/ingest/idols response: indexed=%s", data.get("indexed", 0))
-            st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} idol profiles")
+            logger.info("/ingest/people response: indexed=%s", data.get("indexed", 0))
+            st.sidebar.success(f"✅ Indexed {data.get('indexed', 0)} person profiles")
         except Exception as e:
-            logger.error("/ingest/idols failed: %s", e)
+            logger.error("/ingest/people failed: %s", e)
             st.sidebar.error(f"❌ Ingest failed: {str(e)}")
 
 if st.sidebar.button("🗑️ Clear Chat History", use_container_width=True):
@@ -204,10 +206,10 @@ if st.sidebar.button("🗑️ Clear Chat History", use_container_width=True):
 st.sidebar.divider()
 st.sidebar.markdown("""
 ### About
-**JAV RAG Chatbot** — Information retrieval for Japanese Adult Videos.
+**IMDb RAG Chatbot** — Ask about movies, TV shows, actors, and actresses.
 
 - **Search**: Semantic search via FAISS
-- **Retrieve**: Metadata from r18.com, javlibrary, dmm
+- **Retrieve**: IMDb non-commercial datasets (datasets.imdbws.com)
 - **Answer**: Claude LLM with RAG context
 
 Built with FastAPI + FAISS + Claude + Streamlit

@@ -9,8 +9,6 @@ numpy<2
 huggingface-hub<0.17
 sentence-transformers==2.7.0
 requests==2.31.0
-beautifulsoup4==4.12.2
-lxml==4.9.3
 python-dotenv==1.0.0
 pydantic==2.5.0
 pydantic-settings==2.1.0

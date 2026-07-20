@@ -1,1 +1,1 @@
-"""JAV RAG Chatbot."""
+"""IMDb RAG Chatbot."""

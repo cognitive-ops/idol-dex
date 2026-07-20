@@ -39,6 +39,7 @@ wheels/
 # Data
 data/faiss_index/
 data/metadata.json
+data/imdb/
 *.faiss
 
 # Logs

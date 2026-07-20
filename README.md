@@ -1,6 +1,8 @@
-# Idol Dex — JAV RAG Chatbot
+# Idol Dex — IMDb RAG Chatbot
 
-RAG-powered chatbot for Japanese Adult Video (JAV) information. Scrapes metadata from r18.com, javlibrary.com, dmm.co.jp. Users ask questions; Claude answers using retrieved context from FAISS vector index.
+RAG-powered chatbot for movies, TV shows, actors and actresses. Loads IMDb's free [non-commercial datasets](https://datasets.imdbws.com/) (titles, ratings, cast, people — no plot summaries). Users ask questions; Claude answers using retrieved context from FAISS/Qdrant.
+
+> The official IMDb API (developer.imdb.com) is GraphQL, paid, and gated behind AWS Data Exchange — no public key, no plain REST. This project uses the free non-commercial dataset dumps instead.
 
 ## Architecture
 
@@ -9,9 +11,9 @@ FastAPI server
     ↓
 User query
     ↓
-FAISS retrieval (semantic search via sentence-transformers)
+FAISS/Qdrant retrieval (semantic search via sentence-transformers)
     ↓
-Retrieved documents (title, actors, date, plot)
+Retrieved documents (title/year/genres/rating/cast, or person/birth-year/known-for)
     ↓
 Claude (with RAG context)
     ↓
@@ -51,14 +53,14 @@ python -m uvicorn src.api:app --reload
 # POST /ingest
 ```
 
-Scrapes r18.com, javlibrary, dmm.co.jp and indexes into FAISS.
+Downloads IMDb's dataset TSVs (cached under `IMDB_DATA_DIR`), joins top titles by vote count with their cast and person profiles, and indexes into FAISS/Qdrant. First run is slow (multi-hundred-MB dataset files); subsequent runs reuse the cached files.
 
 #### 2. Chat
 
 ```bash
 curl -X POST http://localhost:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"query": "What are the most popular JAV actresses?"}'
+  -d '{"query": "What are Tom Hanks most popular movies?"}'
 ```
 
 Response:
@@ -67,10 +69,12 @@ Response:
   "answer": "Based on the database...",
   "sources": [
     {
-      "title": "SDMU-605",
-      "url": "https://www.r18.com/...",
-      "actors": "Tsubomi, Aiko Natsukawa",
-      "date": "2023-01-15",
+      "title": "Forrest Gump",
+      "url": "https://www.imdb.com/title/tt0109830/",
+      "actors": "Tom Hanks, Robin Wright, Gary Sinise",
+      "year": "1994",
+      "genres": "Drama, Romance",
+      "rating": 8.8,
       "similarity": 0.92
     }
   ]
@@ -80,7 +84,7 @@ Response:
 #### 3. Direct search (no Claude)
 
 ```bash
-curl "http://localhost:8000/search?q=milf"
+curl "http://localhost:8000/search?q=heist"
 ```
 
 ## API Endpoints
@@ -88,43 +92,35 @@ curl "http://localhost:8000/search?q=milf"
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| POST | `/ingest` | Scrape sources + index (one-time) |
+| POST | `/ingest` | Load top titles + cast, index (one-time) |
+| POST | `/ingest/people` | Load actor/actress profiles only |
 | POST | `/chat` | Query with RAG + Claude |
 | GET | `/search` | Direct metadata search |
 
 ## Components
 
 - **embedder.py** — sentence-transformers (local, no API calls)
-- **rag.py** — FAISS index + metadata storage
-- **scraper.py** — r18.com, javlibrary, dmm crawlers
+- **rag.py** — FAISS/Qdrant index + metadata storage
+- **imdb_data.py** — downloads + parses IMDb non-commercial dataset TSVs
 - **api.py** — FastAPI app + Claude integration
 - **config.py** — env settings
 
 ## Limitations
 
-- **r18.com scraper** is basic (CSS selectors may need updates if site changes)
-- **javlibrary, dmm** scrapers not fully implemented (need respectful rate-limiting, proxies for DMM outside Japan)
+- **No plot summaries** — the non-commercial datasets only ship structured facts (title, year, genres, rating, cast, birth/death year), not synopses
+- **Bounded ingest** — only the top `IMDB_MAX_TITLES` titles by vote count are indexed (dataset has 10M+ titles total); raise the limit for broader coverage at the cost of slower ingest
 - **No multi-modal** (images, trailers, video clips)
-- **Local FAISS only** (no distributed/cloud option yet)
+- **Local FAISS only** by default (Qdrant available via docker-compose)
 - **Single replica** (no concurrent requests handling)
 
 ## Roadmap
 
-- [ ] Implement full javlibrary + dmm scrapers with politeness (rate-limits, robots.txt respect)
+- [ ] Resolve full known-for lists (not just titles already in the ingested top-N set)
 - [ ] Add Postgres for distributed state + concurrent requests
 - [ ] Cache query results + embeddings
-- [ ] OpenSearch/Qdrant backend option (vs local FAISS)
-- [ ] Multi-modal (images from listings, trailer metadata)
-- [ ] Approval-gate sensitive content (safety check before returning results)
-- [ ] Webhook ingestion (push new titles from source sites)
+- [ ] Multi-modal (poster images)
+- [ ] Webhook ingestion (pick up IMDb's periodic dataset refreshes automatically)
 - [ ] Analytics (query logging, popular searches)
-
-## Safety
-
-- Answers flagged as "adult content" (metadata filtered if needed)
-- Rate-limiting to prevent abuse
-- Source attribution always included
-- Claude instructed to be factual, not promotional
 
 ## License
 

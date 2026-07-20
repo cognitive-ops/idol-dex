@@ -22,7 +22,7 @@ class Document:
     def __init__(self, doc_id: str, title: str, metadata: dict, content: str):
         self.doc_id = doc_id
         self.title = title
-        self.metadata = metadata  # {actors, date, plot, reviews, source_url}
+        self.metadata = metadata  # {type, actors/cast, year, genres, rating, url, ...}
         self.content = content  # full text for context
 
     def to_dict(self) -> dict:
@@ -131,7 +131,7 @@ class QdrantStore:
         "metadata.type",
         "metadata.actors",
         "metadata.name",
-        "metadata.release_date",
+        "metadata.year",
     )
 
     def _ensure_collection(self):
@@ -182,7 +182,7 @@ class QdrantStore:
 
     def add_documents(self, docs: list[Document]) -> None:
         """Upsert documents as points (vector + full payload) into Qdrant, in batches
-        so a big scrape (thousands of idols/movies) doesn't embed/upsert in one shot."""
+        so a big ingest (thousands of titles/people) doesn't embed/upsert in one shot."""
         from qdrant_client.models import PointStruct
 
         for start in range(0, len(docs), self._UPSERT_BATCH_SIZE):

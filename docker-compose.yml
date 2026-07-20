@@ -16,6 +16,8 @@ services:
     environment:
       VECTOR_BACKEND: qdrant
       QDRANT_URL: http://qdrant:6333
+    volumes:
+      - imdb_data:/app/data/imdb
     depends_on:
       - qdrant
 
@@ -35,3 +37,4 @@ services:
 
 volumes:
   qdrant_data:
+  imdb_data:

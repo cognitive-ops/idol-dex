@@ -7,11 +7,11 @@ import anthropic
 
 from .config import settings
 from .rag import rag_store
-from .scraper import ingest_idols_only, ingest_jav_data
+from .imdb_data import ingest_imdb_data, ingest_people_only
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="JAV RAG Chatbot", version="0.1.0")
+app = FastAPI(title="IMDb RAG Chatbot", version="0.1.0")
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
 
@@ -31,19 +31,19 @@ async def health():
 
 @app.post("/ingest")
 async def ingest():
-    """One-time: scrape JAV data (movies + idols) and index into FAISS."""
+    """One-time: load IMDb dataset (top titles by votes + cast) and index into FAISS."""
     logger.debug("POST /ingest")
-    count = await ingest_jav_data()
+    count = await ingest_imdb_data()
     logger.info("/ingest done: indexed=%d", count)
     return {"indexed": count, "index_path": settings.faiss_index_path}
 
 
-@app.post("/ingest/idols")
-async def ingest_idols():
-    """Ingest idol profiles only (name, age, debut, cup size, movie codes)."""
-    logger.debug("POST /ingest/idols")
-    count = await ingest_idols_only()
-    logger.info("/ingest/idols done: indexed=%d", count)
+@app.post("/ingest/people")
+async def ingest_people():
+    """Ingest actor/actress profiles only (name, birth/death year, professions, known-for)."""
+    logger.debug("POST /ingest/people")
+    count = await ingest_people_only()
+    logger.info("/ingest/people done: indexed=%d", count)
     return {"indexed": count, "index_path": settings.faiss_index_path}
 
 
@@ -73,18 +73,20 @@ async def chat(req: ChatRequest) -> ChatResponse:
             "url": doc.metadata.get("url", ""),
             "similarity": 1 / (1 + distance)  # convert L2 distance to similarity
         }
-        if doc.metadata.get("type") == "idol":
+        if doc.metadata.get("type") == "person":
             src.update({
                 "name": doc.metadata.get("name", ""),
-                "age": doc.metadata.get("age", ""),
-                "debut": doc.metadata.get("debut", ""),
-                "cup": doc.metadata.get("cup", ""),
-                "movie_codes": doc.metadata.get("movie_codes", []),
+                "birth_year": doc.metadata.get("birth_year", ""),
+                "death_year": doc.metadata.get("death_year", ""),
+                "professions": doc.metadata.get("professions", ""),
+                "known_for": doc.metadata.get("known_for", []),
             })
         else:
             src.update({
                 "actors": doc.metadata.get("actors", ""),
-                "date": doc.metadata.get("release_date", ""),
+                "year": doc.metadata.get("year", ""),
+                "genres": doc.metadata.get("genres", ""),
+                "rating": doc.metadata.get("rating", ""),
             })
         sources.append(src)
 
@@ -93,14 +95,14 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
     # Query Claude with context
     system_prompt = (
-        "You are a helpful JAV (Japanese Adult Video) information assistant. "
-        "Answer user questions based on the provided context — this includes both movie "
-        "titles (title, actors, release date, plot) and idol profiles (name, age, debut, "
-        "cup size, movie codes). Be factual, helpful, and respectful. "
+        "You are a helpful movie/TV information assistant backed by IMDb's non-commercial "
+        "dataset. Answer user questions based on the provided context — this includes both "
+        "titles (name, year, genres, rating, cast) and people (actor/actress name, birth/death "
+        "year, professions, known-for titles). Be factual and helpful. "
         "If information is not in the context, say so clearly."
     )
 
-    user_message = f"""Context from JAV database:
+    user_message = f"""Context from IMDb dataset:
 
 {context}
 
@@ -139,7 +141,7 @@ async def search(q: str, type: str | None = None, actors: str | None = None):
             {
                 "title": doc.title,
                 "actors": doc.metadata.get("actors", ""),
-                "date": doc.metadata.get("release_date", ""),
+                "year": doc.metadata.get("year", ""),
                 "url": doc.metadata.get("url", ""),
                 "similarity": 1 / (1 + distance)
             }
