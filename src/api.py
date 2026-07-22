@@ -5,6 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import anthropic
 
+from . import agent
 from .config import settings
 from .rag import rag_store
 from .imdb_data import ingest_imdb_data, ingest_people_only
@@ -22,6 +23,12 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: list[dict]
+
+
+class AgentChatResponse(BaseModel):
+    answer: str
+    sources: list[dict]
+    sub_queries: list[str]
 
 
 @app.get("/health")
@@ -126,6 +133,24 @@ Please answer based on the context above. If the question cannot be answered fro
     logger.debug("/chat: answer_len=%d sources=%d", len(answer), len(sources))
 
     return ChatResponse(answer=answer, sources=sources)
+
+
+@app.post("/chat/agent")
+async def chat_agent(req: ChatRequest) -> AgentChatResponse:
+    """Agentic RAG: Claude decomposes the question into sub-queries, searches
+    the IMDb dataset once per sub-query, and synthesizes a final answer from
+    everything it finds. Slower and pricier than /chat — use for multi-part
+    or comparison questions (e.g. "compare X and Y's careers")."""
+    logger.debug("POST /chat/agent query=%r", req.query)
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="query required")
+
+    result = agent.answer(req.query)
+    logger.debug(
+        "/chat/agent: sub_queries=%d sources=%d",
+        len(result["sub_queries"]), len(result["sources"]),
+    )
+    return AgentChatResponse(**result)
 
 
 @app.get("/search")

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     """RAG chatbot config."""
 
     anthropic_api_key: str = ""
-    model: str = "claude-3-5-sonnet-20241022"
+    model: str = "claude-opus-4-8"
 
     # Vector backend: "faiss" (local file-based, default for dev) or "qdrant" (docker-compose)
     vector_backend: str = "faiss"
